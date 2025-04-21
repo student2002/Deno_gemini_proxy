@@ -1,0 +1,24 @@
+{
+  "name": "gemini-proxy",
+  "description": "Google Gemini API Reverse Proxy",
+  "version": "1.0.0",
+  "allow": ["net"],
+  "tasks": {
+    "start": "deno run --allow-net main.ts",
+    "dev": "deno run --watch --allow-net main.ts"
+  },
+  "imports": {
+    "std/": "https://deno.land/std@0.202.0/"
+  },
+  "lint": {
+    "rules": {
+      "tags": ["recommended"],
+      "exclude": ["no-unused-vars"]
+    }
+  },
+  "fmt": {
+    "lineWidth": 120,
+    "indentWidth": 2,
+    "singleQuote": true
+  }
+}
