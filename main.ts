@@ -1,38 +1,58 @@
-// gemini_native_proxy.ts
-import { serve } from "https://deno.land/std@0.202.0/http/server.ts";
+import { serve } from "https://deno.land/std@0.200.0/http/server.ts";
 
 const TARGET_HOST = "https://generativelanguage.googleapis.com";
 
-async function handler(req: Request): Promise<Response> {
+function getProxyHost(request: Request): string {
+  const url = new URL(request.url);
+  return `${url.protocol}//${url.host}`;
+}
+
+async function proxyRequest(request: Request, replaceHost: boolean): Promise<Response> {
   try {
-    // 完整保留原始路径和参数
-    const targetUrl = new URL(req.url.replace(/^https?:\/\/[^/]+/, TARGET_HOST));
-    
-    // 透传所有请求细节
-    const response = await fetch(targetUrl, {
-      method: req.method,
-      headers: req.headers,
-      body: req.body
+    const { pathname, search } = new URL(request.url);
+    const targetUrl = `${TARGET_HOST}${pathname}${search}`;
+    console.log(`Proxying to target: ${targetUrl}`);
+
+    const upstreamResponse = await fetch(targetUrl, {
+      method: request.method,
+      headers: request.headers,
+      body: request.body,
     });
 
-    // 添加 CORS 支持
-    const headers = new Headers(response.headers);
-    headers.set("Access-Control-Allow-Origin", "*");
-    
-    return new Response(response.body, {
-      status: response.status,
-      headers
+    const headers = new Headers(upstreamResponse.headers);
+
+    if (replaceHost) {
+      const proxyHost = getProxyHost(request);
+      console.log(`Replacing headers from ${TARGET_HOST} to ${proxyHost}`);
+      for (const [key, value] of headers.entries()) {
+        if (value.includes(TARGET_HOST)) {
+          headers.set(key, value.replace(TARGET_HOST, proxyHost));
+        }
+      }
+    }
+
+    // 直接使用流式响应体
+    return new Response(upstreamResponse.body, {
+      status: upstreamResponse.status,
+      headers,
     });
 
   } catch (error) {
-    return new Response(JSON.stringify({ 
-      error: "Proxy Error",
-      message: error.message 
-    }), { 
-      status: 500,
-      headers: { "Content-Type": "application/json" }
-    });
+    console.error("Proxy error:", error);
+    return new Response("Proxy error", { status: 502 });
   }
 }
 
-serve(handler, { port: 8000 });
+async function handleRequest(request: Request): Promise<Response> {
+  const url = new URL(request.url);
+
+  if (url.pathname === "/upload/v1beta/files" && request.method === "POST") {
+    console.log("[Special] Handling /upload/v1beta/files POST");
+    return proxyRequest(request, true);
+  }
+
+  return proxyRequest(request, false);
+}
+
+console.log("Proxy is running on http://localhost:8000");
+serve(handleRequest, { port: 8000 });
