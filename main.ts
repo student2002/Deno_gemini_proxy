@@ -1,5 +1,3 @@
-import { serve } from "https://deno.land/std@0.200.0/http/server.ts";
-
 const TARGET_HOST = "https://generativelanguage.googleapis.com";
 
 function getProxyHost(request: Request): string {
@@ -7,52 +5,62 @@ function getProxyHost(request: Request): string {
   return `${url.protocol}//${url.host}`;
 }
 
-async function proxyRequest(request: Request, replaceHost: boolean): Promise<Response> {
+async function proxyRequest(request: Request, replaceHost = false): Promise<Response> {
   try {
-    const { pathname, search } = new URL(request.url);
-    const targetUrl = `${TARGET_HOST}${pathname}${search}`;
-    console.log(`Proxying to target: ${targetUrl}`);
+    const url = new URL(request.url);
+    const targetUrl = `${TARGET_HOST}${url.pathname}${url.search}`;
 
-    const upstreamResponse = await fetch(targetUrl, {
+    const headers = new Headers(request.headers);
+    headers.delete("host"); // 必须删
+
+    const upstream = await fetch(targetUrl, {
       method: request.method,
-      headers: request.headers,
-      body: request.body,
+      headers,
+      body: request.body ?? undefined,
+      redirect: "manual",
     });
 
-    const headers = new Headers(upstreamResponse.headers);
+    const respHeaders = new Headers(upstream.headers);
 
+    // ✅ 禁止缓存（对流很关键）
+    respHeaders.set("cache-control", "no-store");
+
+    // ✅ 仅 upload 场景替换 host
     if (replaceHost) {
       const proxyHost = getProxyHost(request);
-      console.log(`Replacing headers from ${TARGET_HOST} to ${proxyHost}`);
-      for (const [key, value] of headers.entries()) {
-        if (value.includes(TARGET_HOST)) {
-          headers.set(key, value.replace(TARGET_HOST, proxyHost));
+
+      for (const [k, v] of respHeaders.entries()) {
+        if (v.includes(TARGET_HOST)) {
+          respHeaders.set(k, v.replace(TARGET_HOST, proxyHost));
         }
       }
     }
 
-    // 直接使用流式响应体
-    return new Response(upstreamResponse.body, {
-      status: upstreamResponse.status,
-      headers,
+    // ✅ 关键：直接透传 stream（不要动 body）
+    return new Response(upstream.body, {
+      status: upstream.status,
+      headers: respHeaders,
     });
 
-  } catch (error) {
-    console.error("Proxy error:", error);
+  } catch (err) {
+    console.error("Proxy error:", err);
     return new Response("Proxy error", { status: 502 });
   }
 }
 
-async function handleRequest(request: Request): Promise<Response> {
+Deno.serve(async (request: Request) => {
   const url = new URL(request.url);
 
+  // ✅ 健康检查
+  if (url.pathname === "/") {
+    return new Response("ok");
+  }
+
+  // ✅ Gemini 文件上传（需要 header rewrite）
   if (url.pathname === "/upload/v1beta/files" && request.method === "POST") {
-    console.log("[Special] Handling /upload/v1beta/files POST");
     return proxyRequest(request, true);
   }
 
+  // ✅ 普通 + 流式统一处理（完全透传）
   return proxyRequest(request, false);
-}
-
-console.log("Proxy is running on http://localhost:8000");
-serve(handleRequest, { port: 8000 });
+});
